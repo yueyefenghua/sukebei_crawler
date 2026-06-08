@@ -9,18 +9,38 @@ query:
     c: "2_0"
     q: "fhd"
 
+# 可选：如果配置 search_jobs，crawl 会逐个任务采集并统一入库去重。
+# search_jobs:
+#   - name: "fhd-vnds"
+#     filters:
+#       f: 2
+#       c: "2_0"
+#       q: "fhd VNDS"
+#   - name: "fhd-mkmp"
+#     filters:
+#       f: 2
+#       c: "2_0"
+#       q: "fhd MKMP"
+
 crawl:
   max_pages: 1
-  request_delay_seconds: 5
-  request_jitter_seconds: 3
+  request_delay_seconds: 15
+  request_jitter_seconds: 10
   timeout_seconds: 20
   stop_on_block_status: true
   retry_count: 2
 
 conditions:
   min_completed_downloads: 100
+  min_seeders:
+  max_age_days:
+  only_not_downloaded: false
   min_size: "500 MiB"
   max_size: "20 GiB"
+  product_code_include: []
+  product_code_exclude: []
+  product_prefix_include: []
+  product_prefix_exclude: []
   title_include: []
   title_exclude: []
 
@@ -29,7 +49,7 @@ storage:
 
 download:
   output_dir: "./downloads"
-  request_delay_seconds: 5
-  request_jitter_seconds: 3
+  request_delay_seconds: 15
+  request_jitter_seconds: 10
   retry_count: 2
   overwrite_existing: false

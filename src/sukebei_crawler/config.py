@@ -37,6 +37,18 @@ class AppConfig:
     def search_query(self) -> str:
         return str(self.filters.get("q", "") or "")
 
+    @property
+    def search_jobs(self) -> list[dict[str, Any]]:
+        jobs = self.raw.get("search_jobs") or []
+        if jobs:
+            return [normalize_search_job(index, job) for index, job in enumerate(jobs, start=1)]
+        return [
+            {
+                "name": "default",
+                "filters": self.filters,
+            }
+        ]
+
 
 DEFAULTS: dict[str, Any] = {
     "site": {
@@ -47,28 +59,47 @@ DEFAULTS: dict[str, Any] = {
     "query": {"filters": {"f": 2, "c": "2_0", "q": ""}},
     "crawl": {
         "max_pages": 1,
-        "request_delay_seconds": 5,
-        "request_jitter_seconds": 3,
+        "request_delay_seconds": 15,
+        "request_jitter_seconds": 10,
         "timeout_seconds": 20,
         "stop_on_block_status": True,
         "retry_count": 2,
     },
     "conditions": {
         "min_completed_downloads": None,
+        "min_seeders": None,
+        "max_age_days": None,
+        "only_not_downloaded": False,
         "min_size": None,
         "max_size": None,
+        "product_code_include": [],
+        "product_code_exclude": [],
+        "product_prefix_include": [],
+        "product_prefix_exclude": [],
         "title_include": [],
         "title_exclude": [],
     },
     "storage": {"db_path": "./data/items.sqlite"},
     "download": {
         "output_dir": "./downloads",
-        "request_delay_seconds": 5,
-        "request_jitter_seconds": 3,
+        "request_delay_seconds": 15,
+        "request_jitter_seconds": 10,
         "retry_count": 2,
         "overwrite_existing": False,
     },
 }
+
+
+def normalize_search_job(index: int, job: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(job, dict):
+        raise ConfigError(f"search_jobs[{index}] must be a mapping")
+    filters = job.get("filters")
+    if not isinstance(filters, dict):
+        raise ConfigError(f"search_jobs[{index}].filters must be a mapping")
+    return {
+        "name": str(job.get("name") or f"job-{index}"),
+        "filters": dict(filters),
+    }
 
 
 def load_config(path: str | Path) -> AppConfig:
@@ -122,12 +153,15 @@ def validate_config(cfg: AppConfig) -> None:
     download = cfg.raw["download"]
     if int(crawl["max_pages"]) <= 0:
         raise ConfigError("crawl.max_pages must be greater than 0")
-    if float(crawl["request_delay_seconds"]) < 5:
-        raise ConfigError("crawl.request_delay_seconds must be at least 5")
-    if float(download["request_delay_seconds"]) < 5:
-        raise ConfigError("download.request_delay_seconds must be at least 5")
+    if float(crawl["request_delay_seconds"]) < 10:
+        raise ConfigError("crawl.request_delay_seconds must be at least 10")
+    if float(download["request_delay_seconds"]) < 10:
+        raise ConfigError("download.request_delay_seconds must be at least 10")
     if int(crawl["retry_count"]) < 0 or int(download["retry_count"]) < 0:
         raise ConfigError("retry_count cannot be negative")
+    for index, _job in enumerate(cfg.search_jobs, start=1):
+        if not isinstance(_job["filters"], dict):
+            raise ConfigError(f"search job {index} filters must be a mapping")
 
     cfg.db_path.parent.mkdir(parents=True, exist_ok=True)
     cfg.download_dir.mkdir(parents=True, exist_ok=True)

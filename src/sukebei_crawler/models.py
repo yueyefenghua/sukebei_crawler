@@ -8,6 +8,8 @@ class TorrentItem:
     site: str
     title: str
     product_code: str | None
+    product_prefix: str | None
+    product_number: str | None
     detail_url: str
     torrent_url: str | None
     category: str | None

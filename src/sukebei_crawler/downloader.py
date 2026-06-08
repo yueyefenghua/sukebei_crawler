@@ -51,6 +51,7 @@ def download_items(
 
         try:
             response = client.get(str(item["torrent_url"]), referer=str(item.get("detail_url") or ""))
+            validate_torrent_response(response.body)
             target.write_bytes(response.body)
             storage.mark_downloaded(item_id, target)
             success += 1
@@ -71,3 +72,12 @@ def download_items(
             print(f"failed: item={item_id} error={exc}")
 
     return success, failed
+
+
+def validate_torrent_response(body: bytes) -> None:
+    if len(body) < 20:
+        raise ValueError("downloaded torrent file is too small")
+    if not body.startswith(b"d"):
+        raise ValueError("downloaded file does not look like a bencoded torrent")
+    if b"announce" not in body and b"info" not in body:
+        raise ValueError("downloaded file is missing expected torrent keys")

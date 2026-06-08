@@ -6,7 +6,7 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup, Tag
 
 from .models import TorrentItem
-from .product_code import extract_product_code
+from .product_code import extract_product_code_parts
 from .size import parse_size_to_bytes
 
 
@@ -79,10 +79,13 @@ def row_to_item(
     torrent_url = urljoin(base_url, torrent_link["href"]) if torrent_link else None
 
     size_text = cell_text(cells[3]) or None
+    product_parts = extract_product_code_parts(title)
     return TorrentItem(
         site=site,
         title=title,
-        product_code=extract_product_code(title),
+        product_code=product_parts.code if product_parts else None,
+        product_prefix=product_parts.prefix if product_parts else None,
+        product_number=product_parts.number if product_parts else None,
         detail_url=urljoin(base_url, str(detail_href)),
         torrent_url=torrent_url,
         category=category,

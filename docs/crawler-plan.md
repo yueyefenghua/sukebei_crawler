@@ -22,7 +22,8 @@
 默认策略：
 
 - 不并发请求。
-- 每次请求之间加入固定延迟，默认不少于 5 秒。
+- 每次请求之间加入固定延迟，默认不少于 15 秒，并带随机抖动。
+- 每个搜索任务第一页请求前也先等待一次，避免程序启动后立即请求。
 - 页面采集和 `.torrent` 下载分别配置请求间隔。
 - 支持请求间隔抖动，例如在基础延迟上随机增加 0 到 3 秒，避免机械式固定频率。
 - 支持最大页数限制。
@@ -87,18 +88,38 @@ query:
     c: "2_0"
     q: "fhd"
 
+# 可选：配置后 crawl 会逐个任务采集并统一入库去重。
+search_jobs:
+  - name: "fhd-vnds"
+    filters:
+      f: 2
+      c: "2_0"
+      q: "fhd VNDS"
+  - name: "fhd-mkmp"
+    filters:
+      f: 2
+      c: "2_0"
+      q: "fhd MKMP"
+
 crawl:
   max_pages: 3
-  request_delay_seconds: 5
-  request_jitter_seconds: 3
+  request_delay_seconds: 15
+  request_jitter_seconds: 10
   timeout_seconds: 20
   stop_on_block_status: true
   retry_count: 2
 
 conditions:
   min_completed_downloads: 100
+  min_seeders: 10
+  max_age_days:
+  only_not_downloaded: false
   min_size: "500 MiB"
   max_size: "20 GiB"
+  product_code_include: []
+  product_code_exclude: []
+  product_prefix_include: ["VNDS", "MKMP"]
+  product_prefix_exclude: []
   title_include: []
   title_exclude: []
 
@@ -107,8 +128,8 @@ storage:
 
 download:
   output_dir: "./downloads"
-  request_delay_seconds: 5
-  request_jitter_seconds: 3
+  request_delay_seconds: 15
+  request_jitter_seconds: 10
   retry_count: 2
   overwrite_existing: false
 ```
@@ -135,13 +156,58 @@ https://sukebei.nyaa.si/?f=2&c=2_0&q=fhd
 
 `q` 是关键词字段，可以通过配置文件修改，也可以后续支持 CLI 参数覆盖。
 
+如果配置了 `search_jobs`，`crawl` 会忽略单个默认查询的执行入口，逐个执行 `search_jobs` 里的任务，所有结果统一写入 SQLite，并通过 `UNIQUE(site, detail_url)` 去重。`query.filters` 仍可作为默认单任务配置保留。
+
+### 站点原生筛选边界
+
+站点本身支持通过 `q` 做文本关键词搜索，也可以把多个关键词放在同一个 `q` 中缩小结果范围。
+
+例如搜索标题中包含 `fhd` 和 `VNDS` 的资源：
+
+```text
+https://sukebei.nyaa.si/?f=2&c=2_0&q=fhd+VNDS
+```
+
+或：
+
+```text
+https://sukebei.nyaa.si/?f=2&c=2_0&q=fhd%20VNDS
+```
+
+站点原生支持的主要条件：
+
+- `q`：关键词文本搜索。
+- `c`：分类。
+- `f`：过滤类型，例如 No filter、No remakes、Trusted only。
+- `s`：排序字段，例如 date、size、seeders、leechers、downloads。
+- `o`：排序方向，例如 asc、desc。
+- `p`：页码。
+
+站点不支持结构化字段筛选，例如：
+
+```text
+product_prefix = VNDS
+product_number > 3000
+product_code = VNDS-3440
+completed_downloads > 1000
+size between 1 GiB and 5 GiB
+```
+
+这些字段需要采集回 SQLite 后由本地工具过滤。
+
+推荐策略：
+
+- 站点侧用 `q="fhd VNDS"`、`q="fhd MKMP"` 这类组合关键词减少结果数量。
+- 本地侧用 `product_prefix`、`product_number`、`completed_downloads`、`size_bytes` 做精确过滤。
+- 当单个关键词结果过多、触碰站点页码上限时，按番号前缀或更细关键词拆成多个采集批次。
+
 ### 配置校验
 
 程序启动时需要先校验配置：
 
 - `site.base_url` 必须是合法 URL。
 - `crawl.max_pages` 必须大于 0。
-- `crawl.request_delay_seconds` 和 `download.request_delay_seconds` 默认不小于 5。
+- `crawl.request_delay_seconds` 和 `download.request_delay_seconds` 默认不小于 10，建议保持 15 或更高。
 - `crawl.retry_count` 和 `download.retry_count` 不能小于 0。
 - `conditions.min_size` 和 `conditions.max_size` 同时存在时，`min_size` 不能大于 `max_size`。
 - `query.filters.q` 可以为空，但为空时应明确输出提示，避免误以为正在按关键词搜索。
@@ -183,6 +249,8 @@ https://sukebei.nyaa.si/?f=2&c=2_0&q=fhd
 | --- | --- |
 | `title` | 标题 |
 | `product_code` | 从标题提取的番号，例如 `FNS-216` |
+| `product_prefix` | 番号前缀，例如 `FNS`、`VNDS`，可用于按厂商或系列搜索 |
+| `product_number` | 番号数字编码，例如 `216`、`3440` |
 | `detail_url` | 详情页链接 |
 | `torrent_url` | `.torrent` 下载链接 |
 | `category` | 分类 |
@@ -202,6 +270,21 @@ https://sukebei.nyaa.si/?f=2&c=2_0&q=fhd
 | `download_status` | 下载状态 |
 | `download_error` | 最近一次下载失败原因 |
 
+采集批次表 `crawl_runs` 保存每次任务执行情况：
+
+| 字段 | 说明 |
+| --- | --- |
+| `job_name` | 搜索任务名 |
+| `query_params_json` | 本次任务查询参数 |
+| `started_at` | 开始时间 |
+| `finished_at` | 结束时间 |
+| `pages_requested` | 请求页数 |
+| `parsed_count` | 解析条数 |
+| `inserted_count` | 新增条数 |
+| `updated_count` | 更新条数 |
+| `matching_count` | 符合当前条件条数 |
+| `error` | 错误信息 |
+
 ## 6. SQLite 表设计
 
 建议第一版使用单表 `items`。
@@ -212,6 +295,8 @@ CREATE TABLE IF NOT EXISTS items (
   site TEXT NOT NULL,
   title TEXT NOT NULL,
   product_code TEXT,
+  product_prefix TEXT,
+  product_number TEXT,
   detail_url TEXT NOT NULL,
   torrent_url TEXT,
   category TEXT,
@@ -231,6 +316,22 @@ CREATE TABLE IF NOT EXISTS items (
   download_status TEXT NOT NULL DEFAULT 'pending',
   download_error TEXT,
   UNIQUE(site, detail_url)
+);
+```
+
+```sql
+CREATE TABLE IF NOT EXISTS crawl_runs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_name TEXT NOT NULL,
+  query_params_json TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  pages_requested INTEGER NOT NULL DEFAULT 0,
+  parsed_count INTEGER NOT NULL DEFAULT 0,
+  inserted_count INTEGER NOT NULL DEFAULT 0,
+  updated_count INTEGER NOT NULL DEFAULT 0,
+  matching_count INTEGER NOT NULL DEFAULT 0,
+  error TEXT
 );
 ```
 
@@ -259,7 +360,7 @@ CREATE TABLE IF NOT EXISTS items (
 - 后续页面优先从 HTML 里解析分页区的 `Next` 链接。
 - 如果没有 `Next` 链接，停止采集。
 - 如果达到 `crawl.max_pages`，停止采集。
-- 每次请求前都应用 `crawl.request_delay_seconds + 随机抖动`。
+- 每次请求前都应用 `crawl.request_delay_seconds + 随机抖动`，包括每个任务的第一页。
 - 每一页保存 `source_url`，方便追踪来源。
 
 如果页面结构变化，无法解析分页链接：
@@ -289,6 +390,7 @@ CREATE TABLE IF NOT EXISTS items (
 - `conditions` 只用于统计“符合条件数量”和决定 `list`、`download` 候选。
 - 不要只保存符合条件的资源，否则后续调整条件时会丢失历史采集数据。
 - `download` 只处理符合条件、存在 `torrent_url`、未成功下载的资源。
+- `list` 和 `export` 支持通过 CLI 参数临时覆盖部分筛选条件，例如 `--prefix`、`--code`、`--not-downloaded`、`--min-seeders`。
 
 ## 10. 下载文件命名
 
@@ -301,13 +403,14 @@ CREATE TABLE IF NOT EXISTS items (
 - 移除或替换非法路径字符，例如 `/`、`\`、`..`、控制字符。
 - 如果标题为空或清洗后为空，使用 `item-{id}.torrent`。
 - 默认不覆盖已有文件，除非配置 `download.overwrite_existing: true`。
+- 下载后需要做基础校验，文件过小、不是 bencode 字典格式、缺少常见 torrent key 时不标记为 downloaded。
 
 ## 11. CLI 命令设计
 
 ### 采集
 
 ```bash
-python -m sukebei_crawler crawl --config config.yaml
+python -m sukebei_crawler --config config.yaml crawl
 ```
 
 行为：
@@ -323,13 +426,13 @@ python -m sukebei_crawler crawl --config config.yaml
 可选支持覆盖关键词：
 
 ```bash
-python -m sukebei_crawler crawl --config config.yaml --q fhd
+python -m sukebei_crawler --config config.yaml crawl --q fhd
 ```
 
 ### 查询符合条件的资源
 
 ```bash
-python -m sukebei_crawler list --config config.yaml
+python -m sukebei_crawler --config config.yaml list
 ```
 
 行为：
@@ -338,10 +441,19 @@ python -m sukebei_crawler list --config config.yaml
 - 使用配置中的 `conditions` 再过滤一次。
 - 输出标题、大小、下载完成次数、种子 URL 等摘要。
 
+常用筛选：
+
+```bash
+python -m sukebei_crawler --config config.yaml list --prefix VNDS --limit 20
+python -m sukebei_crawler --config config.yaml list --code VNDS-3440
+python -m sukebei_crawler --config config.yaml list --not-downloaded
+python -m sukebei_crawler --config config.yaml list --min-seeders 20
+```
+
 ### 下载种子
 
 ```bash
-python -m sukebei_crawler download --config config.yaml
+python -m sukebei_crawler --config config.yaml download
 ```
 
 行为：
@@ -354,10 +466,53 @@ python -m sukebei_crawler download --config config.yaml
 建议第一版下载命令默认需要 `--yes` 才真正执行：
 
 ```bash
-python -m sukebei_crawler download --config config.yaml --yes
+python -m sukebei_crawler --config config.yaml download --yes
 ```
 
 没有 `--yes` 时只预览将要下载的列表。
+
+### 导出
+
+```bash
+python -m sukebei_crawler --config config.yaml export --format csv --output exports.csv
+python -m sukebei_crawler --config config.yaml export --format json --output exports.json
+```
+
+行为：
+
+- 从 SQLite 中读取符合条件的数据。
+- 支持 `--prefix`、`--code`、`--not-downloaded`、`--min-seeders` 临时筛选。
+- 支持 CSV 和 JSON。
+
+### 采集批次
+
+```bash
+python -m sukebei_crawler --config config.yaml runs --limit 20
+```
+
+行为：
+
+- 查看最近 `crawl_runs` 记录。
+- 输出任务名、页数、解析数、新增数、更新数、错误信息。
+
+### 本地 Web 页面
+
+```bash
+python -m sukebei_crawler --config config.yaml serve
+```
+
+默认地址：
+
+```text
+http://127.0.0.1:8765
+```
+
+行为：
+
+- 展示本地 SQLite 中的资源表格。
+- 支持按番号前缀、完整番号、未下载筛选。
+- 展示最近采集批次。
+- 支持手动下载单个 `.torrent` 文件。
 
 ## 12. 日志与输出
 
@@ -370,6 +525,7 @@ python -m sukebei_crawler download --config config.yaml --yes
 - `logs/` 目录由用户在 cron 重定向时使用，程序只保证目录可创建。
 - 摘要包括：请求页数、解析条数、新增条数、更新条数、符合条件条数、下载成功数、下载失败数。
 - 下载预览时列出将要下载的前若干条，并提示需要 `--yes` 才会实际下载。
+- `runs` 命令可查看结构化采集批次记录。
 
 ## 13. 第一版实施范围
 
@@ -403,22 +559,32 @@ python -m sukebei_crawler download --config config.yaml --yes
 - `download` 没有 `--yes` 时只预览，不产生 `.torrent` 文件。
 - `download --yes` 时只下载未成功下载且符合条件的 `.torrent`。
 - 请求之间存在配置的固定延迟和随机抖动。
+- 每个搜索任务启动前存在配置的固定延迟和随机抖动。
 - 遇到封禁类状态码会停止本轮任务，不持续请求。
 - 下载失败会记录 `download_status` 和 `download_error`。
+- `export` 能导出符合条件的数据。
+- `runs` 能展示最近采集批次。
+- `serve` 能启动本地页面并展示资源。
 
 ## 15. 后续可选增强
 
 后续可以再加：
 
-- 多关键词配置。
-- 标题包含、排除规则。
 - 每个关键词独立条件。
-- 导出 CSV。
 - 详情页二次采集。
 - 下载失败记录表。
 - 请求缓存。
 - 更完整的运行日志。
 - 和 Linux `cron` 示例文档集成。
+
+已实现的增强：
+
+- 多搜索任务配置 `search_jobs`。
+- 按番号前缀、完整番号、做种数、是否下载等本地筛选。
+- CSV/JSON 导出。
+- 采集批次表 `crawl_runs`。
+- `.torrent` 基础内容校验。
+- 本地 Web 页面查看与手动下载。
 
 ## 16. cron 示例
 
@@ -427,14 +593,14 @@ python -m sukebei_crawler download --config config.yaml --yes
 示例：每天凌晨 2 点执行一次采集。
 
 ```cron
-0 2 * * * cd /home/song/project/sukebei && python -m sukebei_crawler crawl --config config.yaml >> logs/crawl.log 2>&1
+0 2 * * * cd /home/song/project/sukebei && python -m sukebei_crawler --config config.yaml crawl >> logs/crawl.log 2>&1
 ```
 
 示例：每天凌晨 2 点采集，2 点 30 分预览待下载资源。
 
 ```cron
-0 2 * * * cd /home/song/project/sukebei && python -m sukebei_crawler crawl --config config.yaml >> logs/crawl.log 2>&1
-30 2 * * * cd /home/song/project/sukebei && python -m sukebei_crawler download --config config.yaml >> logs/download-preview.log 2>&1
+0 2 * * * cd /home/song/project/sukebei && python -m sukebei_crawler --config config.yaml crawl >> logs/crawl.log 2>&1
+30 2 * * * cd /home/song/project/sukebei && python -m sukebei_crawler --config config.yaml download >> logs/download-preview.log 2>&1
 ```
 
 实际下载建议不要默认放入 cron，除非已经确认筛选条件稳定可靠。

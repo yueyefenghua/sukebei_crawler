@@ -7,7 +7,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .models import TorrentItem
-from .product_code import extract_product_code
+from .product_code import extract_product_code_parts
 
 TZ = ZoneInfo("Asia/Shanghai")
 
@@ -34,6 +34,8 @@ class Storage:
               site TEXT NOT NULL,
               title TEXT NOT NULL,
               product_code TEXT,
+              product_prefix TEXT,
+              product_number TEXT,
               detail_url TEXT NOT NULL,
               torrent_url TEXT,
               category TEXT,
@@ -56,6 +58,23 @@ class Storage:
             )
             """
         )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS crawl_runs (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              job_name TEXT NOT NULL,
+              query_params_json TEXT NOT NULL,
+              started_at TEXT NOT NULL,
+              finished_at TEXT,
+              pages_requested INTEGER NOT NULL DEFAULT 0,
+              parsed_count INTEGER NOT NULL DEFAULT 0,
+              inserted_count INTEGER NOT NULL DEFAULT 0,
+              updated_count INTEGER NOT NULL DEFAULT 0,
+              matching_count INTEGER NOT NULL DEFAULT 0,
+              error TEXT
+            )
+            """
+        )
         self.migrate_schema()
         self.backfill_product_codes()
         self.conn.commit()
@@ -67,6 +86,10 @@ class Storage:
         }
         if "product_code" not in columns:
             self.conn.execute("ALTER TABLE items ADD COLUMN product_code TEXT")
+        if "product_prefix" not in columns:
+            self.conn.execute("ALTER TABLE items ADD COLUMN product_prefix TEXT")
+        if "product_number" not in columns:
+            self.conn.execute("ALTER TABLE items ADD COLUMN product_number TEXT")
 
     def upsert_items(self, items: list[TorrentItem]) -> tuple[int, int]:
         inserted = 0
@@ -90,11 +113,11 @@ class Storage:
             self.conn.execute(
                 """
                 INSERT INTO items (
-                  site, title, product_code, detail_url, torrent_url, category, size_text, size_bytes,
+                  site, title, product_code, product_prefix, product_number, detail_url, torrent_url, category, size_text, size_bytes,
                   seeders, leechers, completed_downloads, published_at, search_query,
                   query_params_json, source_url, first_seen_at, last_seen_at
                 ) VALUES (
-                  :site, :title, :product_code, :detail_url, :torrent_url, :category, :size_text, :size_bytes,
+                  :site, :title, :product_code, :product_prefix, :product_number, :detail_url, :torrent_url, :category, :size_text, :size_bytes,
                   :seeders, :leechers, :completed_downloads, :published_at, :search_query,
                   :query_params_json, :source_url, :first_seen_at, :last_seen_at
                 )
@@ -108,6 +131,8 @@ class Storage:
             UPDATE items SET
               title = :title,
               product_code = :product_code,
+              product_prefix = :product_prefix,
+              product_number = :product_number,
               torrent_url = :torrent_url,
               category = :category,
               size_text = :size_text,
@@ -128,18 +153,40 @@ class Storage:
 
     def backfill_product_codes(self) -> None:
         rows = self.conn.execute(
-            "SELECT id, title FROM items WHERE product_code IS NULL OR product_code = ''"
+            """
+            SELECT id, title FROM items
+            WHERE product_code IS NULL OR product_code = ''
+               OR product_prefix IS NULL OR product_prefix = ''
+               OR product_number IS NULL OR product_number = ''
+            """
         ).fetchall()
         for row in rows:
-            product_code = extract_product_code(str(row["title"]))
-            if product_code:
+            parts = extract_product_code_parts(str(row["title"]))
+            if parts:
                 self.conn.execute(
-                    "UPDATE items SET product_code = ? WHERE id = ?",
-                    (product_code, int(row["id"])),
+                    """
+                    UPDATE items
+                    SET product_code = ?,
+                        product_prefix = ?,
+                        product_number = ?
+                    WHERE id = ?
+                    """,
+                    (parts.code, parts.prefix, parts.number, int(row["id"])),
                 )
 
     def all_items(self) -> list[dict]:
         rows = self.conn.execute("SELECT * FROM items ORDER BY completed_downloads DESC, id DESC").fetchall()
+        return [dict(row) for row in rows]
+
+    def recent_runs(self, limit: int = 20) -> list[dict]:
+        rows = self.conn.execute(
+            """
+            SELECT * FROM crawl_runs
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
         return [dict(row) for row in rows]
 
     def download_candidates(self) -> list[dict]:
@@ -176,5 +223,52 @@ class Storage:
             WHERE id = ?
             """,
             (error[:1000], item_id),
+        )
+        self.conn.commit()
+
+    def start_crawl_run(self, job_name: str, query_params_json: str) -> int:
+        cursor = self.conn.execute(
+            """
+            INSERT INTO crawl_runs (job_name, query_params_json, started_at)
+            VALUES (?, ?, ?)
+            """,
+            (job_name, query_params_json, now_iso()),
+        )
+        self.conn.commit()
+        return int(cursor.lastrowid)
+
+    def finish_crawl_run(
+        self,
+        run_id: int,
+        *,
+        pages_requested: int,
+        parsed_count: int,
+        inserted_count: int,
+        updated_count: int,
+        matching_count: int,
+        error: str | None = None,
+    ) -> None:
+        self.conn.execute(
+            """
+            UPDATE crawl_runs
+            SET finished_at = ?,
+                pages_requested = ?,
+                parsed_count = ?,
+                inserted_count = ?,
+                updated_count = ?,
+                matching_count = ?,
+                error = ?
+            WHERE id = ?
+            """,
+            (
+                now_iso(),
+                pages_requested,
+                parsed_count,
+                inserted_count,
+                updated_count,
+                matching_count,
+                error,
+                run_id,
+            ),
         )
         self.conn.commit()

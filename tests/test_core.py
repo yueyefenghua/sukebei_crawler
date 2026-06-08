@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from sukebei_crawler.config import parse_simple_yaml
+from sukebei_crawler.filters import item_matches
 from sukebei_crawler.parser import parse_listing
-from sukebei_crawler.product_code import extract_product_code
+from sukebei_crawler.product_code import extract_product_code, extract_product_code_parts
 from sukebei_crawler.size import parse_size_to_bytes
 
 
@@ -38,6 +39,27 @@ def test_extract_product_code() -> None:
     assert extract_product_code("+++ [FHD] FNS-216 some title") == "FNS-216"
     assert extract_product_code("+++ [FHD] MKMP-734 other title") == "MKMP-734"
     assert extract_product_code("no code title") is None
+    parts = extract_product_code_parts("+++ [FHD] VNDS-3440 title")
+    assert parts is not None
+    assert parts.code == "VNDS-3440"
+    assert parts.prefix == "VNDS"
+    assert parts.number == "3440"
+
+
+def test_item_matches_product_prefix_and_seeders() -> None:
+    item = {
+        "title": "+++ [FHD] VNDS-3440 title",
+        "product_code": "VNDS-3440",
+        "product_prefix": "VNDS",
+        "completed_downloads": 500,
+        "seeders": 20,
+        "size_bytes": 1024**3,
+        "download_status": "pending",
+        "downloaded_at": None,
+    }
+    assert item_matches(item, {"product_prefix_include": ["VNDS"], "min_seeders": 10})
+    assert not item_matches(item, {"product_prefix_include": ["MKMP"]})
+    assert not item_matches(item, {"min_seeders": 30})
 
 
 def test_parse_listing_row_and_next_link() -> None:
@@ -67,6 +89,8 @@ def test_parse_listing_row_and_next_link() -> None:
     assert len(items) == 1
     assert items[0].title == "+++ [FHD] FNS-216 Sample Title"
     assert items[0].product_code == "FNS-216"
+    assert items[0].product_prefix == "FNS"
+    assert items[0].product_number == "216"
     assert items[0].detail_url == "https://sukebei.nyaa.si/view/1"
     assert items[0].torrent_url == "https://sukebei.nyaa.si/download/1.torrent"
     assert items[0].completed_downloads == 300

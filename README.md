@@ -28,6 +28,30 @@ python3 -m sukebei_crawler --config config.yaml crawl
 python3 -m sukebei_crawler --config config.yaml list --limit 20
 ```
 
+按番号前缀查看：
+
+```bash
+python3 -m sukebei_crawler --config config.yaml list --prefix VNDS --limit 20
+```
+
+导出 CSV：
+
+```bash
+python3 -m sukebei_crawler --config config.yaml export --format csv --output exports.csv
+```
+
+查看采集批次：
+
+```bash
+python3 -m sukebei_crawler --config config.yaml runs
+```
+
+启动本地页面：
+
+```bash
+python3 -m sukebei_crawler --config config.yaml serve
+```
+
 预览待下载的 `.torrent`：
 
 ```bash
@@ -51,7 +75,11 @@ python3 -m sukebei_crawler --config config.yaml crawl --q fhd
 - `crawl` 会保存所有解析成功的资源，不只保存符合筛选条件的资源。
 - `list` 和 `download` 会按 `config.yaml` 里的 `conditions` 过滤。
 - `download` 没有 `--yes` 时只预览，不会写入 `.torrent` 文件。
-- 程序默认不并发请求，带请求间隔、随机抖动、有限重试和封禁状态停止。
+- `export` 可以导出当前筛选结果。
+- `runs` 可以查看最近采集任务的页数、解析数、新增数、更新数和错误。
+- `serve` 会启动本地 Web 页面，默认地址是 `http://127.0.0.1:8765`。
+- 程序默认不并发请求，采集和下载都有保守请求间隔、随机抖动、有限重试和封禁状态停止。
+- 默认采集和下载请求间隔是 `15 + 0-10` 秒；不建议调低。
 - 自动创建 `data/`、`downloads/`、`logs/` 目录。
 
 ## 验证
