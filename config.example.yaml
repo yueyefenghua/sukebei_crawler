@@ -1,0 +1,35 @@
+site:
+  base_url: "https://sukebei.nyaa.si"
+  user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36"
+  accept_language: "en-US,en;q=0.9"
+
+query:
+  filters:
+    f: 2
+    c: "2_0"
+    q: "fhd"
+
+crawl:
+  max_pages: 1
+  request_delay_seconds: 5
+  request_jitter_seconds: 3
+  timeout_seconds: 20
+  stop_on_block_status: true
+  retry_count: 2
+
+conditions:
+  min_completed_downloads: 100
+  min_size: "500 MiB"
+  max_size: "20 GiB"
+  title_include: []
+  title_exclude: []
+
+storage:
+  db_path: "./data/items.sqlite"
+
+download:
+  output_dir: "./downloads"
+  request_delay_seconds: 5
+  request_jitter_seconds: 3
+  retry_count: 2
+  overwrite_existing: false
